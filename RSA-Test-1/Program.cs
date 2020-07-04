@@ -10,20 +10,20 @@ namespace RSA_Test_1
     {
         static void Main(string[] args)
         {
-            var p = GeneratePrime(129);
-            var q = GeneratePrime(129);
-            var n = p * q; // n.GetByteCount() == p.GetByteCount() + q.GetByteCount(); usually...
+            var p = GeneratePrime(128);
+            var q = GeneratePrime(128);
+            var n = p * q;
 
-            var nTotient = TotientOfProduct(p, q);
+            var lambdaN = TotientOfProduct(p, q);
 
             BigInteger e = 65537;
-            (_, BigInteger d, _) = ExtendedEuclideanAlgorithm(e, nTotient);
+            (_, BigInteger d, _) = ExtendedEuclideanAlgorithm(e, lambdaN);
 
             //var plainIntBefore = TextToBigInt("Hello");
-            var plainIntBefore = TextToBigInt("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+            var m = TextToBigInt("ABCDEFGHIJKLMNOPQRSTUVWXYZ÷");
 
-            var cypherInt = BigInteger.ModPow(plainIntBefore, e, n); // encrypts using public key
-            var plainIntAfter = BigInteger.ModPow(cypherInt, d, n); // decrypts using private key
+            var c = RsaEncrypt(n, e, m); // encrypts using public key
+            var plainIntAfter = RsaDecrypt(n, d, c); // decrypts using private key
             var plainText = BigIntToText(plainIntAfter);
 
             Console.WriteLine(plainText);
@@ -32,12 +32,12 @@ namespace RSA_Test_1
         private static BigInteger TextToBigInt(string inText)
         {
             var myBytes = Encoding.UTF8.GetBytes(inText);
-            return new BigInteger(myBytes);
+            return BytesToBigInt(myBytes);
         }
 
         private static string BigIntToText(BigInteger inBigInt)
         {
-            var myBytes = inBigInt.ToByteArray();
+            var myBytes = BigIntToBytes(inBigInt);
             return Encoding.UTF8.GetString(myBytes);
         }
 
@@ -100,7 +100,7 @@ namespace RSA_Test_1
         // Implementation of Miller-Rabin prime probability test
         private static bool IsPrime(BigInteger candidate, int numRounds)
         {
-            var bytes = new byte[candidate.GetByteCount()];
+            var bytes = new byte[BigIntByteCount(candidate)];
 
             var rng = new Random();
 
@@ -110,7 +110,7 @@ namespace RSA_Test_1
                 do // find random integer a in range [2, candidate - 2]
                 {
                     rng.NextBytes(bytes);
-                    a = new BigInteger(bytes);
+                    a = BytesToBigInt(bytes);
                 } while (a > candidate - 2 || a < 2);
 
                 (int r, BigInteger d) = DecomposeCandidate(candidate);
@@ -166,9 +166,7 @@ namespace RSA_Test_1
 
         private static BigInteger GeneratePrime(int numBytes)
         {
-            // We must include space for an additional byte (0x00) at the end
-            //  of the array so that the generated BigInteger is positive
-            var inArr = new byte[numBytes];
+            var inArr = new byte[numBytes]; // includes space for a final null-byte
 
             var rng = new Random();
             BigInteger a;
@@ -176,14 +174,81 @@ namespace RSA_Test_1
             {
                 rng.NextBytes(inArr);
 
-                inArr[0] |= 0x01; // guarantees an odd value
+                inArr[0] |= 0x01; // guarantees an odd value; the uniformity of the distribution is unchanged
                 inArr[^2] |= 0x80; // guarantees the most significant bit is always set to 1
-                inArr[^1] = 0x00; // guarantees a positive value; without this, the value would always be negative
 
-                a = new BigInteger(inArr);
+                a = BytesToBigInt(inArr);
             } while (!IsPrime(a, 100));
 
             return a;
+        }
+
+        // outputs ciphertext representative c
+        private static BigInteger RsaEncrypt(BigInteger n, BigInteger e, BigInteger m)
+        {
+            if (m < 0 || m > n - 1)
+                throw new Exception("message representative out of range");
+
+            return BigInteger.ModPow(m, e, n);
+        }
+
+        // outputs message representative m
+        // RsaDecrypt currently does not support (p, q, dP, dQ, qInv), {(r_i, d_i, t_i), i = 3, ..., u} format
+        private static BigInteger RsaDecrypt(BigInteger n, BigInteger d, BigInteger c)
+        {
+            if (c < 0 || c > n - 1)
+                throw new Exception("ciphertext representative out of range");
+
+            return BigInteger.ModPow(c, d, n);
+        }
+
+        // fills the role of RFC8017's I2OSP (integer to octet stream primitive); little-endian
+        private static byte[] BigIntToBytes(BigInteger x, int? xLen = null)
+        {
+            var byteArr = x.ToByteArray();
+            
+            if(byteArr[^1] == 0x00) // if the most-significant-byte is a null byte
+            {
+                byteArr = byteArr.Take(byteArr.Length - 1).ToArray(); // remove the null byte from the array
+            }
+
+            if(xLen.HasValue)
+            {
+                if (byteArr.Length > xLen)
+                {
+                    throw new Exception("integer too large");
+                }
+                else if (byteArr.Length < xLen)
+                {
+                    byteArr = byteArr.Concat(new byte[xLen.Value - byteArr.Length]).ToArray();
+                }
+            }
+
+            return byteArr;
+        }
+
+        // fills the role of RFC8017's OS2IP (octet stream to integer primitive); little-endian
+        private static BigInteger BytesToBigInt(byte[] x)
+        {
+            if(x[^1] >= 0x80) // if the most-significant-bit is 1
+            {
+                x = x.Concat(new byte[] { 0x00 }).ToArray(); // add a null byte to the array
+            }
+
+            return new BigInteger(x);
+        }
+
+        private static int BigIntByteCount(BigInteger x)
+        {
+            var bytes = x.ToByteArray();
+            var byteCount = bytes.Length;
+
+            if (bytes[^1] == 0x00) // if the most-significant-byte is a null byte
+            {
+                byteCount -= 1;
+            }
+
+            return byteCount;
         }
     }
 }
