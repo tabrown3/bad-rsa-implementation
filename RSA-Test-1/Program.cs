@@ -2,6 +2,7 @@
 using System.Collections;
 using System.Linq;
 using System.Numerics;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace RSA_Test_1
@@ -16,7 +17,7 @@ namespace RSA_Test_1
 
             var lambdaN = TotientOfProduct(p, q);
 
-            BigInteger e = 65537;
+            BigInteger e = 65537; // 2^16 + 1
             (_, BigInteger d, _) = ExtendedEuclideanAlgorithm(e, lambdaN);
 
             //var plainIntBefore = TextToBigInt("Hello");
@@ -249,6 +250,71 @@ namespace RSA_Test_1
             }
 
             return byteCount;
+        }
+
+        // Based on RFC8017's MGF1 function at Appendix B.2.1.
+        //  Uses SHA-256 as the hash function
+        private static byte[] MaskGenerator(byte[] mgfSeed, int maskLen)
+        {
+            int hLen = 32; // SHA-256 produces a 32 byte (256 bit) hash
+            byte[] t = new byte[0];
+
+            using (SHA256 sha256 = SHA256.Create())
+            {
+                for (int i = 0; i < (int)Math.Ceiling((double)maskLen / hLen); i++)
+                {
+                    var c = BigIntToBytes(i, 4);
+                    var hash = sha256.ComputeHash(mgfSeed.Concat(c).ToArray());
+                    t = t.Concat(hash).ToArray();
+                }
+            }
+
+            return t.Take(maskLen).ToArray();
+        }
+
+        private static byte[] RsaOaepEncrypt(BigInteger n, BigInteger e, byte[] mBytes, byte[] label = null)
+        {
+            var k = BigIntByteCount(n);
+            var mLen = mBytes.Length;
+            var hLen = 32;
+
+            if (mLen > k - 2*hLen - 2)
+            {
+                throw new Exception("message too long");
+            }
+
+            if (label == null)
+            {
+                label = Encoding.UTF8.GetBytes("");
+            }
+
+            byte[] lHash;
+            using (SHA256 sha256 = SHA256.Create())
+            {
+                lHash = sha256.ComputeHash(label);
+            }
+
+            var padding = new byte[k - mLen - 2 * hLen - 2];
+
+            var dataBlock = lHash.Concat(padding).Concat(new byte[] { 0x01 }).Concat(mBytes).ToArray();
+
+            var rng = new Random();
+            var seed = new byte[hLen];
+            rng.NextBytes(seed);
+
+            var dbMask = MaskGenerator(seed, k - hLen - 1);
+            var maskedDb = dataBlock.Zip(dbMask, (u, v) => (byte)(u ^ v)).ToArray();
+
+            var seedMask = MaskGenerator(maskedDb, hLen);
+            var maskedSeed = seed.Zip(seedMask, (u, v) => (byte)(u ^ v)).ToArray();
+
+            var em = (new byte[1]).Concat(maskedSeed).Concat(maskedDb).ToArray();
+
+            var message = BytesToBigInt(em);
+            var ciphertext = RsaEncrypt(n, e, message);
+            var c = BigIntToBytes(ciphertext);
+
+            return c;
         }
     }
 }
