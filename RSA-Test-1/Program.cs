@@ -283,6 +283,82 @@ namespace RSA_Test_1
                 throw new Exception("message too long");
             }
 
+            var lHash = genLHash(label);
+
+            var padding = new byte[k - mLen - 2 * hLen - 2];
+
+            var dataBlock = lHash.Concat(padding).Concat(new byte[] { 0x01 }).Concat(mBytes).ToArray();
+
+            var rng = new Random();
+            var seed = new byte[hLen];
+            rng.NextBytes(seed);
+
+            var dbMask = MaskGenerator(seed, k - hLen - 1);
+            var maskedDb = XOr(dataBlock, dbMask);
+
+            var seedMask = MaskGenerator(maskedDb, hLen);
+            var maskedSeed = XOr(seed, seedMask);
+
+            var em = (new byte[1]).Concat(maskedSeed).Concat(maskedDb).ToArray();
+
+            var message = BytesToBigInt(em);
+            var ciphertext = RsaEncrypt(n, e, message);
+            var c = BigIntToBytes(ciphertext);
+
+            return c;
+        }
+
+        private static byte[] RsaOaepDecrypt(BigInteger n, BigInteger d, byte[] cBytes, byte[] label = null)
+        {
+            var k = BigIntByteCount(n);
+            var cLen = cBytes.Length;
+            var hLen = 32;
+
+            if (cLen != k)
+            {
+                throw new Exception("decryption error");
+            }
+
+            if (k < 2*hLen + 2)
+            {
+                throw new Exception("decryption error");
+            }
+
+            var c = BytesToBigInt(cBytes);
+
+            var m = RsaDecrypt(n, d, c);
+
+            var em = BigIntToBytes(m, k);
+
+            var lHash = genLHash(label);
+
+            var y = em[0];
+            var maskedSeedMaskedDb = em.TakeLast(k - 1);
+            var maskedSeed = maskedSeedMaskedDb.Take(hLen).ToArray();
+            var maskedDb = maskedSeedMaskedDb.TakeLast(k - hLen).ToArray();
+
+            var seedMask = MaskGenerator(maskedDb, hLen);
+            var seed = XOr(maskedSeed, seedMask);
+            var dbMask = MaskGenerator(seed, k - hLen - 1);
+            var dataBlock = XOr(maskedDb, dbMask);
+
+            var lHashPrime = dataBlock.Take(hLen).ToArray();
+            var paddingDividerMessage = dataBlock.Take(k - hLen);
+            var padding = paddingDividerMessage.TakeWhile(u => u == 0x00).ToArray();
+            var dividerMessage = paddingDividerMessage.TakeLast(k - hLen - padding.Length);
+            var divider = dividerMessage.ToArray()[0];
+            var message = dividerMessage.TakeWhile((u, i) => i > 0).ToArray();
+
+            if(divider != 0x01 || lHash != lHashPrime || y != 0x00)
+            {
+                throw new Exception("decryption error");
+            }
+
+            return message;
+        }
+
+        private static byte[] genLHash(byte[] label)
+        {
             if (label == null)
             {
                 label = Encoding.UTF8.GetBytes("");
@@ -294,27 +370,17 @@ namespace RSA_Test_1
                 lHash = sha256.ComputeHash(label);
             }
 
-            var padding = new byte[k - mLen - 2 * hLen - 2];
+            return lHash;
+        }
 
-            var dataBlock = lHash.Concat(padding).Concat(new byte[] { 0x01 }).Concat(mBytes).ToArray();
+        private static byte[] XOr(byte[] a, byte[] b)
+        {
+            if (a.Length != b.Length)
+            {
+                throw new Exception("decryption error");
+            }
 
-            var rng = new Random();
-            var seed = new byte[hLen];
-            rng.NextBytes(seed);
-
-            var dbMask = MaskGenerator(seed, k - hLen - 1);
-            var maskedDb = dataBlock.Zip(dbMask, (u, v) => (byte)(u ^ v)).ToArray();
-
-            var seedMask = MaskGenerator(maskedDb, hLen);
-            var maskedSeed = seed.Zip(seedMask, (u, v) => (byte)(u ^ v)).ToArray();
-
-            var em = (new byte[1]).Concat(maskedSeed).Concat(maskedDb).ToArray();
-
-            var message = BytesToBigInt(em);
-            var ciphertext = RsaEncrypt(n, e, message);
-            var c = BigIntToBytes(ciphertext);
-
-            return c;
+            return a.Zip(b, (u, v) => (byte)(u ^ v)).ToArray();
         }
     }
 }
